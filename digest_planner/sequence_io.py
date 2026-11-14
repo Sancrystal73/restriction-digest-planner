@@ -1,23 +1,14 @@
-"""FASTA reading and validation for plasmid sequences.
+"""Read plasmid sequences from FASTA files."""
 
-A plasmid is stored as a Plasmid object with a name, an uppercase
-ACGT-only sequence, its length, and whether it is circular.
-"""
-
-from pathlib import Path
-
-
-VALID_BASES = set("ACGT")
+# Only A, C, G, T are allowed in a sequence.
+VALID_BASES = "ACGT"
 
 
 class Plasmid:
-    """A single plasmid sequence.
+    """One plasmid: a name and a DNA sequence.
 
-    Attributes:
-        name: Identifier taken from the FASTA header (first word).
-        sequence: Uppercase DNA sequence, ACGT only.
-        length: Length of the sequence in bp.
-        circular: True for plasmids (default); False for linear DNA.
+    A plasmid is circular by default, so a recognition site may
+    wrap around the end of the sequence back to the start.
     """
 
     def __init__(self, name, sequence, circular=True):
@@ -27,49 +18,44 @@ class Plasmid:
         self.circular = circular
         self.validate()
 
-    def validate(self):
-        """Reject any character other than A, C, G, T.
+    def __str__(self):
+        return self.name + " (" + str(self.length) + " bp)"
 
-        Raises:
-            ValueError: naming the offending character and its
-                0-based position in the sequence.
-        """
-        for i, base in enumerate(self.sequence):
+    def validate(self):
+        """Reject any character other than A, C, G, T."""
+        for i in range(len(self.sequence)):
+            base = self.sequence[i]
             if base not in VALID_BASES:
-                raise ValueError(
-                    f"Invalid base {base!r} at position {i} in plasmid "
-                    f"{self.name!r}: only A, C, G, T are allowed"
-                )
+                raise ValueError("Invalid base '" + base + "' at position "
+                                 + str(i) + " in plasmid '" + self.name
+                                 + "': only A, C, G, T are allowed")
         if self.length == 0:
-            raise ValueError(f"Plasmid {self.name!r} has an empty sequence")
+            raise ValueError("Plasmid '" + self.name + "' is empty")
 
     @classmethod
     def from_fasta(cls, path, circular=True):
-        """Read one FASTA record from *path*.
+        """Read one FASTA record from a file.
 
-        The header line starts with '>'. All following lines are
-        concatenated, whitespace is stripped, and the sequence is
-        upper-cased. Only the first record is read.
+        The first line starts with '>'. Every line after that is
+        part of the sequence. Only the first record is read.
         """
-        path = Path(path)
         name = None
         parts = []
-        with path.open() as handle:
-            for line in handle:
+        with open(path) as f:
+            for line in f:
                 line = line.strip()
-                if not line:
+                if line == "":
                     continue
-                if line.startswith(">"):
+                if line[0] == ">":
                     if name is not None:
-                        # Only the first record is used.
                         break
-                    # First word of the header is the name.
-                    name = line[1:].strip().split()[0] if line[1:].strip() else path.stem
+                    words = line[1:].strip().split()
+                    if words:
+                        name = words[0]
+                    else:
+                        name = path.split("/")[-1]
                 else:
                     parts.append(line.upper())
         if name is None:
-            raise ValueError(f"No FASTA record found in {path}")
-        return cls(name, "".join(parts), circular=circular)
-
-    def __repr__(self):
-        return f"Plasmid(name={self.name!r}, length={self.length}, circular={self.circular})"
+            raise ValueError("No FASTA record found in " + path)
+        return cls(name, "".join(parts), circular)

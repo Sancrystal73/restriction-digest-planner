@@ -20,8 +20,10 @@ Given two plasmid sequences (FASTA) and a table of available enzymes
    for each, and a ranking by how easily the bands could be told apart.
 
 Part 1 (project definition) is in the course submission; this repository
-is the Part 2 implementation. It is written in Python 3 using only the
-standard library.
+is the Part 2 implementation. It is written in plain Python 3 using only
+what the course taught: lists, dictionaries, classes, insertion sort,
+brute-force string search, exhaustive enumeration, and `heapq` for
+ranking. No third-party packages are needed.
 
 ## Quick start
 
@@ -30,24 +32,23 @@ standard library.
 python data/make_synthetic.py
 
 # Version 1: report every digest whose fragment lists differ at all
-python -m digest_planner.main data/plasmid_A.fasta data/plasmid_B.fasta data/enzymes.csv --top 5
+python -m digest_planner.main data/plasmid_A.fasta data/plasmid_B.fasta data/enzymes.csv
 
-# Version 2 (improved): only digests with a >=10% band difference
-python -m digest_planner.main data/plasmid_A.fasta data/plasmid_B.fasta data/enzymes.csv --threshold 0.10 --top 5
+# Version 2 (improved): only digests with a >=10% band difference, top 5
+python -m digest_planner.main data/plasmid_A.fasta data/plasmid_B.fasta data/enzymes.csv 0.10 5
 
-# Run the tests (34 tests; 2 skipped unless pUC19/lambda are downloaded)
+# Run the tests (5 test cases)
 python -m unittest discover -s tests
 ```
 
-No third-party packages are needed to run the program. Python 3.10+
-is sufficient.
+Python 3.10+ is sufficient.
 
 ## Example run
 
 Synthetic pair, 12 enzymes, 78 digests tried:
 
 ```
-$ python -m digest_planner.main data/plasmid_A.fasta data/plasmid_B.fasta data/enzymes.csv --threshold 0.10 --top 5
+$ python -m digest_planner.main data/plasmid_A.fasta data/plasmid_B.fasta data/enzymes.csv 0.10 5
 
 Plasmid A: plasmid_A (3000 bp)
 Plasmid B: plasmid_B (3000 bp)
@@ -79,7 +80,7 @@ distinguishes the pair. Every other enzyme cuts neither plasmid (no
 sites by construction), and every other pair involves at most one
 cutting enzyme, so it behaves like a single digest.
 
-The full run finishes in about 0.08 s on a laptop, well under the
+The full run finishes in about 0.14 s on a laptop, well under the
 one-second expectation from Part 1.
 
 ### What the score means
@@ -97,12 +98,13 @@ lists differ at all. That over-reports: on a real gel, bands a few
 percent apart run as one band, because migration distance is roughly
 linear in the *logarithm* of fragment size.
 
-Version 2 adds an adjustable relative-difference threshold
-(`--threshold`, default 0.10). A digest counts as distinguishing only
-when its score reaches the threshold, i.e. at least one band differs
-by that fraction from every band in the other lane.
+Version 2 adds an adjustable relative-difference threshold (the
+optional fourth argument, 0.10 by default in the examples). A digest
+counts as distinguishing only when its score reaches the threshold,
+i.e. at least one band differs by that fraction from every band in the
+other lane.
 
-Concrete case (test T12): fragments `[1000, 2000]` vs `[1020, 1980]`.
+Concrete case (test 4): fragments `[1000, 2000]` vs `[1020, 1980]`.
 
 - Version 1: distinguishing (the lists differ).
 - Version 2 at threshold 0.05: **not** distinguishing (score 0.0196 —
@@ -116,15 +118,13 @@ reports fewer digests, but ones more likely to be readable on a gel.
 Part 3 will compare the two versions on both datasets at thresholds
 0.05, 0.10, and 0.15.
 
-Other improvements applied in this implementation:
+Other points in this implementation:
 
 - **One-uncut handling:** if exactly one plasmid is uncut, the result
   is distinguishing but scored 0.00 and ranked last, because uncut
-  (supercoiled / nicked) plasmid does not run at its true size.
+  plasmid does not run at its true size.
 - **Duplicate-cut removal:** two enzymes sharing a site and cut
   position produce one cut, never a 0 bp fragment.
-- **Cut-position caching:** each single-enzyme search runs once per
-  plasmid and is reused by all 11 pair digests involving that enzyme.
 
 ### Expected weaknesses (from Part 1, still true)
 
@@ -137,7 +137,7 @@ Other improvements applied in this implementation:
   intensity, very small fragments, and the 100 bp–25 kb usable range
   are not modelled. The 0.10 default is a working assumption, not a
   measured value.
-- Selection sort (O(n²)) and brute-force search (O(L·m)) suit plasmids
+- Insertion sort (O(n²)) and brute-force search (O(L·m)) suit plasmids
   but would be slow on genome-sized input.
 
 ## Datasets
@@ -151,7 +151,7 @@ Other improvements applied in this implementation:
 | Enzyme table | 12 common Type IIP enzymes | `data/enzymes.csv`, compiled by hand from REBASE |
 
 **Downloading the public sequences** (needed only for the orientation
-pair and tests T14/T16):
+pair):
 
 1. Open [NCBI Nucleotide](https://www.ncbi.nlm.nih.gov/nucleotide/) and
    search for the accession (L09137 or J02459).
@@ -169,22 +169,23 @@ BamHI,G^GATCC
 
 ## Design
 
-Six modules in a pipeline: input parsing → digest simulation →
-comparison → ranking.
+Six short modules in a pipeline: input parsing → digest simulation →
+comparison → ranking. Each module uses only basic Python: plain
+classes, lists, dictionaries, loops, and file reading with `open()`.
 
 ```
 digest_planner/
-  main.py         command-line entry point
+  main.py         command-line entry point (sys.argv)
   sequence_io.py  FASTA reading and validation
   enzymes.py      Enzyme class, CSV loading, reverse complement
-  digest.py       site search, selection sort, fragment lengths
+  digest.py       site search, insertion sort, fragment lengths
   compare.py      distinguishability tests and scoring
   planner.py      DigestPlanner: enumerate, evaluate, rank, report
 data/
   enzymes.csv, plasmid_A.fasta, plasmid_B.fasta,
   make_synthetic.py, make_orientation_pair.py
 tests/
-  test_enzymes.py, test_digest.py, test_compare.py, test_planner.py
+  test_digest_planner.py   (5 test cases)
 results/
   example outputs for the synthetic pair
 ```
@@ -192,66 +193,71 @@ results/
 | Module | Key classes / functions | Responsibility |
 | --- | --- | --- |
 | `sequence_io.py` | `Plasmid`, `Plasmid.from_fasta`, `validate` | Reads one FASTA record, upper-cases it, rejects non-ACGT |
-| `enzymes.py` | `Enzyme`, `Enzyme.from_caret`, `is_palindromic`, `reverse_complement`, `load_enzymes` | Parses the CSV, converts `^` notation to site + offset, keeps palindromic enzymes |
-| `digest.py` | `find_sites`, `selection_sort`, `cut_positions`, `fragment_lengths` | Wrap-around site search, sorted/deduped cuts, fragments |
+| `enzymes.py` | `Enzyme`, `Enzyme.from_caret`, `is_palindromic`, `reverse_complement`, `load_enzymes` | Parses the CSV by hand, converts `^` notation to site + offset, keeps palindromic enzymes |
+| `digest.py` | `find_sites`, `insertion_sort`, `cut_positions`, `fragment_lengths` | Wrap-around site search, sorted/deduped cuts, fragments |
 | `compare.py` | `differs_exact`, `separation_score`, `distinguishable` | Decides whether two fragment lists look different; scores them |
-| `planner.py` | `DigestResult`, `DigestPlanner` (`enumerate_schemes`, `evaluate`, `run`, `top`, `report`) | Searches all digests, ranks the distinguishing ones, prints the report |
-| `main.py` | `main` | Parses arguments, runs the planner |
+| `planner.py` | `DigestResult`, `DigestPlanner` (`enumerate_schemes`, `evaluate`, `run`, `top`, `report`) | Searches all digests, ranks the distinguishing ones with a heap, prints the report |
+| `main.py` | `main` | Reads command-line arguments, runs the planner |
 
 Pipeline: `main` loads the plasmids and enzymes → `enumerate_schemes`
 lists every single enzyme and unordered pair (78 for 12 enzymes) →
 for each scheme and plasmid, `cut_positions` finds sites, converts
 them to cut positions, sorts and dedupes them, and `fragment_lengths`
 turns them into fragments → `evaluate` compares the two fragment
-lists → `run` pushes distinguishing results onto a heap keyed by
-score → `top(k)` pops the k best and `report` prints them.
+lists → `top` pushes distinguishing results onto a heap keyed by
+score and pops the k best → `report` prints them.
 
 ### Fragments from a circular plasmid
 
-With cut positions sorted as c₁ < c₂ < … < cₙ in a plasmid of length L:
+With cut positions sorted as c1 < c2 < … < cn in a plasmid of length L:
 
 - 0 cuts: uncut; 1 cut: one fragment of length L.
-- Otherwise fᵢ = cᵢ₊₁ − cᵢ, and fₙ = (L − cₙ) + c₁ (wraps the origin).
+- Otherwise fi = c(i+1) − ci, and fn = (L − cn) + c1 (wraps the origin).
   All lengths sum to L.
 
 ### Libraries
 
-Standard library only: `argparse` (CLI), `csv` (enzyme table), `heapq`
-(ranking), `random` (synthetic data, fixed seed), `unittest` (tests).
-Biopython (`Bio.Restriction`) is used only in the optional cross-check
-test T16 and is not required to run the program.
+Only the standard library, and only the parts used in class:
 
-### Data structures and algorithms
+| Library | Used for |
+| --- | --- |
+| `sys` | Command-line arguments in `main.py` |
+| `heapq` | Heap ranking of distinguishing digests (taught in the heapsort lectures) |
+| `random` | Generating the synthetic test plasmids from a fixed seed (data script only) |
+| `unittest` | Running the 5 test cases in `tests/` |
+| `os` | File paths in the data scripts and tests |
 
-- **Dictionary:** enzyme table (name → Enzyme), complement map,
-  cut-position cache per enzyme and plasmid.
+The CSV table is parsed by reading lines and splitting on commas, and
+command-line arguments are read from `sys.argv` directly — no extra
+parsing libraries.
+
+### Data structures and algorithms (all from class)
+
+- **Dictionary:** enzyme table (name → Enzyme) and the complement map.
 - **List:** site positions, cut positions, fragment lengths, schemes.
 - **Heap (priority queue):** ranking distinguishing digests by score.
-- **Selection sort:** ordering cut positions and fragment lists.
-- **Brute-force string search:** sliding-window site search, extended
-  by m−1 bases for circular wrap-around.
+- **Insertion sort:** ordering cut positions and fragment lists.
+- **Brute-force string search:** sliding-window site search with string
+  slicing, extended by m−1 bases for circular wrap-around.
 - **Exhaustive enumeration:** all singles and unordered pairs.
 - **Heap-based selection:** popping the k highest scores for the report.
 
 ## Tests
 
-16 tests from Part 1 (T1–T16), written with `unittest`:
+Five test cases in `tests/test_digest_planner.py`, written with
+`unittest`:
 
-- T1–T3: reverse complement, palindrome filter, `^` parsing.
-- T4–T10: site search (linear and origin-spanning), selection sort,
-  fragment lengths, zero/one cut, duplicate cuts, fragment-sum invariant
-  (100 random sequences).
-- T11–T12: version 1 rule and version 2 threshold.
-- T13: end-to-end synthetic pair (single digests fail, double succeeds,
-  score 0.43).
-- T14: end-to-end orientation pair (skipped unless the pair is generated).
-- T15: FASTA validation rejects non-ACGT characters.
-- T16: optional Biopython cross-check (skipped unless pUC19 is
-  downloaded and Biopython is installed).
+| # | What is tested |
+| --- | --- |
+| 1 | Reverse complement, palindrome check, and `^` parsing |
+| 2 | Site search (linear and origin-spanning) and insertion sort |
+| 3 | Fragment lengths, including zero-cut and one-cut edge cases |
+| 4 | Version 1 vs version 2: the threshold improvement |
+| 5 | End to end on the synthetic pair (single digests fail, the double digest gives 800, 2,200 vs 1,400, 1,600 bp, score 0.43) |
 
 ```bash
 python -m unittest discover -s tests
-# Ran 34 tests in ~0.5s — OK (skipped=2)
+# Ran 5 tests in ~0.1s — OK
 ```
 
 ## References

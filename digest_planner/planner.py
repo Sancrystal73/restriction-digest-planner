@@ -1,93 +1,63 @@
-"""DigestPlanner: enumerate, evaluate, rank, and report digests.
+"""DigestPlanner: try every digest, rank the ones that distinguish.
 
 For k enzymes there are k single-enzyme digests and k(k-1)/2
 two-enzyme digests. Each digest is evaluated on both plasmids,
-and distinguishing digests are ranked by separation score with
-a heap (heapq), so the k best are retrieved without fully
-sorting every result.
+and the distinguishing ones are ranked by separation score with
+a heap (heapq), so the best results come out first.
 """
 
 import heapq
-from dataclasses import dataclass, field
 
 from .compare import distinguishable, separation_score
 from .digest import cut_positions, fragment_lengths
 
 
-@dataclass(order=False)
 class DigestResult:
-    """Outcome of one digest scheme on the two plasmids."""
+    """The outcome of one digest on the two plasmids."""
 
-    scheme: tuple  # enzyme names, e.g. ("EcoRI", "BamHI")
-    frags_a: list = field(default_factory=list)
-    frags_b: list = field(default_factory=list)
-    distinguishable: bool = False
-    score: float = 0.0
+    def __init__(self, scheme, frags_a, frags_b, is_dist, score):
+        self.scheme = scheme  # tuple of enzyme names, e.g. ("BamHI", "EcoRI")
+        self.frags_a = frags_a
+        self.frags_b = frags_b
+        self.distinguishable = is_dist
+        self.score = score
 
-    @property
-    def label(self):
-        return " + ".join(self.scheme)
-
-    @property
-    def one_uncut(self):
-        return (not self.frags_a) != (not self.frags_b)
+    def __str__(self):
+        return " + ".join(self.scheme) + ": " + str(self.frags_a) \
+            + " vs " + str(self.frags_b) + " (score " \
+            + str(round(self.score, 2)) + ")"
 
 
-def _fmt_frags(frags):
-    if not frags:
+def format_frags(frags):
+    """Format a fragment list for the report."""
+    if len(frags) == 0:
         return "uncut"
-    return ", ".join(str(f) for f in sorted(frags))
+    parts = []
+    for f in sorted(frags):
+        parts.append(str(f))
+    return ", ".join(parts)
 
 
 class DigestPlanner:
     """Search all single and double digests for two plasmids."""
 
     def __init__(self, plasmid_a, plasmid_b, enzymes, threshold=None):
-        """
-        Args:
-            plasmid_a, plasmid_b: Plasmid objects of equal length.
-            enzymes: dict of name -> Enzyme.
-            threshold: None for version 1 (exact difference), or a
-                float such as 0.10 for version 2.
-        """
         if plasmid_a.length != plasmid_b.length:
-            raise ValueError(
-                f"Plasmids must have equal length: {plasmid_a.length} vs {plasmid_b.length}"
-            )
+            raise ValueError("Plasmids must have equal length: "
+                             + str(plasmid_a.length) + " vs "
+                             + str(plasmid_b.length))
         self.plasmid_a = plasmid_a
         self.plasmid_b = plasmid_b
-        self.enzymes = dict(enzymes)
-        self.threshold = threshold
-        # Cache: (plasmid id, enzyme name) -> cut positions.
-        # Lets every pair digest reuse the single-enzyme searches.
-        self._cut_cache = {}
+        self.enzymes = enzymes  # dictionary: name -> Enzyme
+        self.threshold = threshold  # None for version 1, e.g. 0.10 for v2
         self.results = []
-        self._heap = []
-
-    def _cuts_for(self, plasmid, enzyme):
-        key = (id(plasmid), enzyme.name)
-        if key not in self._cut_cache:
-            self._cut_cache[key] = cut_positions(plasmid, [enzyme])
-        return self._cut_cache[key]
-
-    def _frags_for(self, plasmid, scheme_enzymes):
-        # Merge cached single-enzyme cuts, sort, dedup, then fragment.
-        from .digest import selection_sort
-
-        merged = []
-        for enzyme in scheme_enzymes:
-            merged.extend(self._cuts_for(plasmid, enzyme))
-        ordered = selection_sort(merged)
-        deduped = []
-        for cut in ordered:
-            if not deduped or deduped[-1] != cut:
-                deduped.append(cut)
-        return fragment_lengths(deduped, plasmid.length, circular=plasmid.circular)
 
     def enumerate_schemes(self):
         """Every single enzyme and every unordered pair."""
         names = sorted(self.enzymes)
-        schemes = [(name,) for name in names]
+        schemes = []
+        for name in names:
+            schemes.append((name,))
         for i in range(len(names)):
             for j in range(i + 1, len(names)):
                 schemes.append((names[i], names[j]))
@@ -95,69 +65,72 @@ class DigestPlanner:
 
     def evaluate(self, scheme):
         """Evaluate one digest scheme on both plasmids."""
-        scheme_enzymes = [self.enzymes[name] for name in scheme]
-        frags_a = self._frags_for(self.plasmid_a, scheme_enzymes)
-        frags_b = self._frags_for(self.plasmid_b, scheme_enzymes)
+        scheme_enzymes = []
+        for name in scheme:
+            scheme_enzymes.append(self.enzymes[name])
+        cuts_a = cut_positions(self.plasmid_a, scheme_enzymes)
+        cuts_b = cut_positions(self.plasmid_b, scheme_enzymes)
+        frags_a = fragment_lengths(cuts_a, self.plasmid_a.length,
+                                   self.plasmid_a.circular)
+        frags_b = fragment_lengths(cuts_b, self.plasmid_b.length,
+                                   self.plasmid_b.circular)
         score = separation_score(frags_a, frags_b)
-        is_dist = distinguishable(frags_a, frags_b, threshold=self.threshold)
-        return DigestResult(
-            scheme=tuple(scheme),
-            frags_a=frags_a,
-            frags_b=frags_b,
-            distinguishable=is_dist,
-            score=score,
-        )
+        is_dist = distinguishable(frags_a, frags_b, self.threshold)
+        return DigestResult(scheme, frags_a, frags_b, is_dist, score)
 
     def run(self):
-        """Evaluate every scheme; keep distinguishing ones on a heap.
-
-        Returns the list of all DigestResults. The heap holds
-        (-score, index, result) so the highest score pops first.
-        """
+        """Evaluate every scheme and keep the distinguishing ones."""
         self.results = []
-        self._heap = []
-        for idx, scheme in enumerate(self.enumerate_schemes()):
+        for scheme in self.enumerate_schemes():
             result = self.evaluate(scheme)
             self.results.append(result)
-            if result.distinguishable:
-                heapq.heappush(self._heap, (-result.score, idx, result))
         return self.results
 
     def top(self, k=5):
-        """Return the k best distinguishing digests, best first."""
-        if not self._heap and not self.results:
-            self.run()
-        # Pop from a copy so repeated calls still work.
-        heap_copy = list(self._heap)
-        heapq.heapify(heap_copy)
+        """Return the k best distinguishing digests, best first.
+
+        heapq is a min-heap, so scores are pushed negated and the
+        smallest (most negative, i.e. highest score) pops first.
+        """
+        heap = []
+        for i in range(len(self.results)):
+            result = self.results[i]
+            if result.distinguishable:
+                # The index i breaks ties so that two results with
+                # the same score are never compared with each other.
+                heapq.heappush(heap, (-result.score, i, result))
         best = []
-        while heap_copy and len(best) < k:
-            _, _, result = heapq.heappop(heap_copy)
-            best.append(result)
+        while len(heap) > 0 and len(best) < k:
+            item = heapq.heappop(heap)
+            best.append(item[2])
         return best
 
     def report(self, k=5):
-        """Print the top-k distinguishing digests as a plain-text table."""
+        """Print the top-k distinguishing digests as a table."""
         best = self.top(k)
-        total = len(self.results) if self.results else len(self.enumerate_schemes())
-        n_dist = sum(1 for r in self.results if r.distinguishable) if self.results else len(best)
-        version = "v1 (exact)" if self.threshold is None else f"v2 (threshold={self.threshold})"
-        print(f"Plasmid A: {self.plasmid_a.name} ({self.plasmid_a.length} bp)")
-        print(f"Plasmid B: {self.plasmid_b.name} ({self.plasmid_b.length} bp)")
-        print(f"Enzymes: {len(self.enzymes)}; digests tried: {total}; "
-              f"distinguishing ({version}): {n_dist}")
+        count = 0
+        for r in self.results:
+            if r.distinguishable:
+                count += 1
+        if self.threshold is None:
+            version = "v1 (exact)"
+        else:
+            version = "v2 (threshold=" + str(self.threshold) + ")"
+        print("Plasmid A: " + str(self.plasmid_a))
+        print("Plasmid B: " + str(self.plasmid_b))
+        print("Enzymes: " + str(len(self.enzymes))
+              + "; digests tried: " + str(len(self.results))
+              + "; distinguishing (" + version + "): " + str(count))
         print()
-        if not best:
+        if len(best) == 0:
             print("No distinguishing digest found.")
             return best
-        print(f"{'Digest':<25} {'Plasmid A (bp)':<20} {'Plasmid B (bp)':<20} Score")
+        print("Digest                    Plasmid A (bp)       "
+              "Plasmid B (bp)       Score")
         for result in best:
-            print(f"{result.label:<25} {_fmt_frags(result.frags_a):<20} "
-                  f"{_fmt_frags(result.frags_b):<20} {result.score:.2f}")
-        one_uncut = [r for r in best if r.one_uncut]
-        if one_uncut:
-            print()
-            print("Note: digests where exactly one plasmid is uncut are listed")
-            print("separately in effect (score 0.00, ranked last) because uncut")
-            print("plasmid does not run at its true size on a gel.")
+            label = " + ".join(result.scheme)
+            print(label.ljust(25) + " "
+                  + format_frags(result.frags_a).ljust(20) + " "
+                  + format_frags(result.frags_b).ljust(20) + " "
+                  + str(round(result.score, 2)))
         return best
