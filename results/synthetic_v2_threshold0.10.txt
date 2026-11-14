@@ -1,0 +1,6 @@
+Plasmid A: plasmid_A (3000 bp)
+Plasmid B: plasmid_B (3000 bp)
+Enzymes: 12; digests tried: 78; distinguishing (v2 (threshold=0.1)): 1
+
+Digest                    Plasmid A (bp)       Plasmid B (bp)       Score
+BamHI + EcoRI             800, 2200            1400, 1600           0.43

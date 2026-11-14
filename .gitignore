@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+data/puc19.fasta
+data/lambda.fasta
+data/puc19_forward.fasta
+data/puc19_reverse.fasta
